@@ -13,6 +13,8 @@ from pathlib import Path
 
 @dataclass
 class PathConfig:
+    pwd                   : str = field(default_factory=lambda: str(Path.cwd()))
+
     # Raw data
     tweets_gz             : str = "data/raw/USER_TWEETS.txt.gz"
     barbera               : str = "data/raw/USER_POLARITY_BARBERA.txt"
@@ -27,6 +29,22 @@ class PathConfig:
 
     # Evaluation outputs
     eval_dir              : str = "eval"
+
+    def __post_init__(self):
+        base = Path(self.pwd).resolve()
+        self.pwd = str(base)
+        for attr in [
+            "tweets_gz",
+            "barbera",
+            "follower_net",
+            "friend_net",
+            "processed_dir",
+            "checkpoint_dir",
+            "eval_dir",
+        ]:
+            p = Path(getattr(self, attr))
+            if not p.is_absolute():
+                setattr(self, attr, str(base / p))
 
 
 # ── Data Pipeline ─────────────────────────────────────────────────────────────
