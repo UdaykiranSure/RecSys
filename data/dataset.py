@@ -21,15 +21,50 @@ Item vocabulary:
 
 import pickle
 import random
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import DataLoader, Dataset
 
 
 PAD_IDX = 0
+
+
+@dataclass
+class ItemCatalog:
+    """Catalog metadata used by training/evaluation."""
+
+    item2idx: dict[str, int]
+    idx2item: dict[int, str]
+    item_ideo: np.ndarray
+
+    @property
+    def num_items(self) -> int:
+        return len(self.item_ideo)
+
+
+class CollateWithNegatives:
+    """Picklable collate callable that injects negative samples."""
+
+    def __init__(self, neg_sampler: "NegativeSampler", item_ideo_arr: np.ndarray, num_negatives: int):
+        self.neg_sampler = neg_sampler
+        self.item_ideo_arr = item_ideo_arr
+        self.num_negatives = max(1, num_negatives)
+
+    def __call__(self, batch: list[dict]) -> dict:
+        out = collate_fn(batch)
+
+        pos_items = out["target_item"].tolist()
+        neg_items = [self.neg_sampler.sample(int(pos), k=self.num_negatives)[0] for pos in pos_items]
+        neg_item_idx = torch.tensor(neg_items, dtype=torch.long)
+        neg_ideo = torch.tensor(self.item_ideo_arr[neg_item_idx.numpy()], dtype=torch.float32)
+
+        out["neg_item_idx"] = neg_item_idx
+        out["neg_ideo"] = neg_ideo
+        return out
 
 
 # ── Item vocabulary ───────────────────────────────────────────────────────────
@@ -263,7 +298,14 @@ class NegativeSampler:
 def collate_fn(batch: list[dict]) -> dict:
     """Stack a list of sample dicts into batched tensors."""
     keys = batch[0].keys()
-    return {k: torch.stack([b[k] for b in batch]) for k in keys}
+    out = {k: torch.stack([b[k] for b in batch]) for k in keys}
+
+    # Backward-compatible aliases expected by train/evaluate modules.
+    out["hist_item_idx"] = out["history_items"]
+    out["hist_ideo"] = out["history_states"]
+    out["padding_mask"] = out["history_items"].eq(PAD_IDX)
+    out["target_item_idx"] = out["target_item"]
+    return out
 
 
 # ── Factory ───────────────────────────────────────────────────────────────────
@@ -284,7 +326,7 @@ def make_datasets(
         scored = pickle.load(f)
     with open(d / "user_ideology_states.pkl", "rb") as f:
         states = pickle.load(f)
-    with open(d / "user2idx.pkl",             "rb") as f:
+    with open(d / "user2idx-3.pkl",             "rb") as f:
         user2idx = pickle.load(f)
 
     item2idx, idx2item, item_ideo = build_item_vocab(scored, min_item_freq)
@@ -308,3 +350,49 @@ def make_datasets(
     neg_sampler = NegativeSampler(item_ideo, strategy="hard", band=0.5)
 
     return train_ds, val_ds, test_ds, item2idx, idx2item, item_ideo, user2idx, neg_sampler
+
+
+def build_dataloaders(
+    processed_dir: str | Path,
+    max_seq_len: int = 50,
+    batch_size: int = 256,
+    num_workers: int = 0,
+    delta: float = 0.2,
+    val_holdout: int = 1,
+    test_holdout: int = 1,
+    hard_neg_band: float = 0.5,
+    num_negatives: int = 1,
+    min_item_freq: int = 5,
+) -> tuple[DataLoader, DataLoader, DataLoader, ItemCatalog]:
+    """Build train/val/test dataloaders with compatibility batch fields."""
+
+    train_ds, val_ds, test_ds, item2idx, idx2item, item_ideo_dict, _, neg_sampler = make_datasets(
+        processed_dir=processed_dir,
+        max_seq_len=max_seq_len,
+        val_holdout=val_holdout,
+        test_holdout=test_holdout,
+        min_item_freq=min_item_freq,
+        delta=delta,
+    )
+    neg_sampler.band = hard_neg_band
+
+    num_items = (max(item2idx.values()) + 1) if item2idx else 1
+    item_ideo_arr = np.zeros(num_items, dtype=np.float32)
+    for idx, score in item_ideo_dict.items():
+        if 0 <= idx < num_items:
+            item_ideo_arr[idx] = float(score)
+
+    item_catalog = ItemCatalog(item2idx=item2idx, idx2item=idx2item, item_ideo=item_ideo_arr)
+
+    collate_with_negs = CollateWithNegatives(
+        neg_sampler=neg_sampler,
+        item_ideo_arr=item_ideo_arr,
+        num_negatives=num_negatives,
+    )
+
+    common = dict(batch_size=batch_size, num_workers=num_workers, collate_fn=collate_with_negs)
+    train_dl = DataLoader(train_ds, shuffle=True, **common)
+    val_dl = DataLoader(val_ds, shuffle=False, **common)
+    test_dl = DataLoader(test_ds, shuffle=False, **common)
+
+    return train_dl, val_dl, test_dl, item_catalog

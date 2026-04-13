@@ -36,10 +36,10 @@ def run_pipeline(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print("=" * 60)
-    print("STEP 1: Parsing tweets")
-    print("=" * 60)
-    parse_tweets(tweets_path, output_dir)
+    # print("=" * 60)
+    # print("STEP 1: Parsing tweets")
+    # print("=" * 60)
+    # parse_tweets(tweets_path, output_dir)
 
     print("\n" + "=" * 60)
     print("STEP 2: Scoring ideology")

@@ -102,14 +102,24 @@ def score_rt_sequences(
 
 def analyze_distribution(scored: dict) -> None:
     all_s = [s for seq in scored.values() for _, s in seq]
+    finite_scores = np.asarray(all_s, dtype=float)
+    finite_scores = finite_scores[np.isfinite(finite_scores)]
+
+    if finite_scores.size == 0:
+        print("\nIdeology distribution of RT items:")
+        print("  No finite ideology scores available to summarize.")
+        return
+
     bins  = np.linspace(-3, 3, 13)
-    counts, edges = np.histogram(all_s, bins=bins)
+    counts, edges = np.histogram(finite_scores, bins=bins)
+    max_count = int(counts.max()) if counts.size else 0
     print("\nIdeology distribution of RT items:")
     for i, c in enumerate(counts):
-        bar = "█" * int(40 * c / max(counts))
+        bar_len = int(40 * c / max_count) if max_count > 0 else 0
+        bar = "█" * bar_len
         print(f"  [{edges[i]:+.1f},{edges[i+1]:+.1f})  {c:>8,}  {bar}")
-    print(f"\n  N={len(all_s):,}  mean={np.mean(all_s):.3f}  "
-          f"std={np.std(all_s):.3f}  median={np.median(all_s):.3f}")
+    print(f"\n  N={finite_scores.size:,}  mean={np.mean(finite_scores):.3f}  "
+          f"std={np.std(finite_scores):.3f}  median={np.median(finite_scores):.3f}")
 
 
 def run(barbera_path, rt_seq_path, output_dir):

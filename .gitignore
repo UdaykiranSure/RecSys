@@ -1,0 +1,13 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+.venv/
+
+# Generated data artifacts
+data/processed/
+*.pkl
+.*
+raw
+__pycache__

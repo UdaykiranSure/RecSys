@@ -21,7 +21,7 @@ import numpy as np
 from torch.utils.data import DataLoader
 
 from data.dataset import ItemCatalog
-from models.recommender import IdeologicalRecommender
+from models.recommender import IdeologyRecommender
 
 
 # ── Metric helpers ────────────────────────────────────────────────────────────
@@ -70,10 +70,11 @@ def fraction_in_window(
 
 @torch.no_grad()
 def run_evaluation(
-    model:         IdeologicalRecommender,
+    model:         IdeologyRecommender,
     dataloader:    DataLoader,
     item_catalog:  ItemCatalog,
-    all_node_embs: torch.Tensor,
+    graph_x:       torch.Tensor,
+    graph_edge_index: torch.Tensor,
     device:        str,
     k_values:      list[int] = [5, 10, 20],
     split:         str = "val",
@@ -117,20 +118,22 @@ def run_evaluation(
     accum["direction_acc"]    = []
 
     for batch in dataloader:
-        hist_item_idx   = batch["hist_item_idx"].to(device)     # [B, L]
-        hist_ideo       = batch["hist_ideo"].to(device)          # [B, L]
-        padding_mask    = batch["padding_mask"].to(device)       # [B, L]
-        target_item_idx = batch["target_item_idx"].to(device)   # [B]
-        ideo_current    = batch["ideo_current"].to(device)       # [B]
-        direction       = batch["direction"].to(device)          # [B]
-        delta           = batch["delta"].to(device)              # [B]
-        B               = hist_item_idx.shape[0]
+        user_idx        = batch["user_idx"].to(device)            # [B]
+        hist_item_idx   = batch["history_items"].to(device)       # [B, L]
+        hist_ideo       = batch["history_states"].to(device)      # [B, L]
+        target_item_idx = batch["target_item"].to(device)         # [B]
+        ideo_current    = batch["ideo_current"].to(device)        # [B]
+        direction       = batch["direction"].to(device)           # [B]
+        delta           = batch["delta"].to(device)               # [B]
 
         # Encode users
-        hist_embs = model.tweet_encoder(hist_item_idx, hist_ideo)  # [B, L, D]
-        u_seq     = model.sasrec(hist_embs, padding_mask)           # [B, D]
-        u_graph   = all_node_embs[torch.zeros(B, dtype=torch.long, device=device)]
-        u_final   = model.fusion(u_graph, u_seq)                    # [B, D]
+        u_final = model.encode_user(
+            graph_x=graph_x,
+            graph_edge_index=graph_edge_index,
+            user_graph_idx=user_idx,
+            seq_item_ids=hist_item_idx,
+            seq_ideo_scores=hist_ideo,
+        )
 
         # Score all items: [B, M]
         scores = u_final @ all_item_embs.T                          # [B, M]
