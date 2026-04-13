@@ -8,6 +8,10 @@ __pycache__/
 # Generated data artifacts
 data/processed/
 *.pkl
+!data/processed/
+!data/processed/*.pkl
+data/processed/user_sequences.pkl
 .*
+!.gitattributes
 raw
 __pycache__
