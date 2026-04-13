@@ -16,19 +16,19 @@ class PathConfig:
     pwd                   : str = field(default_factory=lambda: str(Path.cwd()))
 
     # Raw data
-    tweets_gz             : str = "data/raw/USER_TWEETS.txt.gz"
-    barbera               : str = "data/raw/USER_POLARITY_BARBERA.txt"
-    follower_net          : str = "data/raw/FULL_FOLLOWER_NETWORK.txt"
-    friend_net            : str = "data/raw/FULL_FRIEND_NETWORK.txt"
+    tweets_gz             : str = "RecSys/data/raw/USER_TWEETS.txt.gz"
+    barbera               : str = "RecSys/data/raw/USER_POLARITY_BARBERA.txt"
+    follower_net          : str = "RecSys/data/raw/FULL_FOLLOWER_NETWORK.txt"
+    friend_net            : str = "RecSys/data/raw/FULL_FRIEND_NETWORK.txt"
 
     # Processed outputs
-    processed_dir         : str = "data/processed"
+    processed_dir         : str = "RecSys/data/processed"
 
     # Model checkpoints
-    checkpoint_dir        : str = "checkpoints"
+    checkpoint_dir        : str = "RecSys/checkpoints"
 
     # Evaluation outputs
-    eval_dir              : str = "eval"
+    eval_dir              : str = "RecSys/eval"
 
     def __post_init__(self):
         base = Path(self.pwd).resolve()
