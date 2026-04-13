@@ -137,7 +137,7 @@ def run_evaluation(
 
         # Score all items: [B, M]
         scores = u_final @ all_item_embs.T                          # [B, M]
-
+        B,M = scores.shape
         # Per-sample evaluation
         for i in range(B):
             target_idx   = target_item_idx[i].item()
