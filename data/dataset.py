@@ -193,9 +193,11 @@ class IdeologySeqDataset(Dataset):
 
             states = user_ideology_states[user_id]
 
-            # Filter sequence to known items only
+            # Filter sequence to known items only; replace NaN ideology with 0
             filtered = [
-                (uid, sc, st)
+                (uid,
+                 float(sc) if np.isfinite(sc) else 0.0,
+                 float(st) if np.isfinite(st) else 0.0)
                 for (uid, sc), st in zip(seq, states)
                 if uid in self.item2idx
             ]
@@ -463,7 +465,13 @@ def build_dataloaders(
     item_ideo_arr = np.zeros(num_items, dtype=np.float32)
     for idx, score in item_ideo_dict.items():
         if 0 <= idx < num_items:
-            item_ideo_arr[idx] = float(score)
+            item_ideo_arr[idx] = float(score) if np.isfinite(score) else 0.0
+
+    # Replace any residual NaN/Inf with 0 (neutral ideology)
+    item_ideo_arr = np.nan_to_num(item_ideo_arr, nan=0.0, posinf=0.0, neginf=0.0)
+
+    nan_count = int(np.isnan(item_ideo_arr).sum())
+    print(f"item_ideo_arr: {num_items} items, NaN cleaned={nan_count}")
 
     item_catalog = ItemCatalog(item2idx=item2idx, idx2item=idx2item, item_ideo=item_ideo_arr)
 

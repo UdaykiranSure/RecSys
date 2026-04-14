@@ -39,12 +39,25 @@ def load_graph_tensors(processed_dir: str | Path, device: str) -> tuple[torch.Te
     graph_x = graph_data.x.float().to(device)
     graph_edge_index = graph_data.edge_index.to(device)
 
-    # Z-score normalize each feature column to prevent exploding embeddings
-    # (barbera scores and log_degree can have very different scales)
+    # Diagnostic: report NaN/Inf in raw features before they silently corrupt training
+    nan_count = torch.isnan(graph_x).sum().item()
+    inf_count = torch.isinf(graph_x).sum().item()
+    print(f"graph_x raw: shape={tuple(graph_x.shape)}  NaN={nan_count}  Inf={inf_count}")
+
+    # Replace NaN/Inf with 0 BEFORE computing mean/std
+    # (a single NaN in graph_x makes mean=NaN → entire normalized tensor is NaN)
+    graph_x = torch.nan_to_num(graph_x, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # Z-score normalize per feature column
     mean = graph_x.mean(dim=0, keepdim=True)
     std  = graph_x.std(dim=0, keepdim=True).clamp(min=1e-6)
     graph_x = (graph_x - mean) / std
 
+    # Safety: clean up any NaN that survived (e.g., constant-value columns)
+    graph_x = torch.nan_to_num(graph_x, nan=0.0)
+
+    print(f"graph_x normalized: min={graph_x.min():.3f}  max={graph_x.max():.3f}  "
+          f"NaN={torch.isnan(graph_x).sum().item()}")
     return graph_x, graph_edge_index
 
 
@@ -128,6 +141,11 @@ def train(config=cfg):
         # updates. The SASRec + Fusion components still train normally.
         with torch.no_grad():
             all_graph_embs = model.graph_encoder(graph_x, graph_edge_index)  # (N, d)
+
+        # Sanity-check graph embeddings before the batch loop
+        if torch.isnan(all_graph_embs).any():
+            print(f"  [ERROR] all_graph_embs contains NaN after graph_encoder — "
+                  f"check graph_x (NaN={torch.isnan(graph_x).sum().item()})")
         # ─────────────────────────────────────────────────────────────────
 
         running_total       = 0.0
@@ -181,7 +199,22 @@ def train(config=cfg):
             # Skip NaN batches instead of letting them corrupt weights
             if not torch.isfinite(total):
                 nan_steps += 1
-                if nan_steps <= 3:
+                if nan_steps == 1:
+                    # First NaN: print a per-tensor breakdown to find the root cause
+                    def _nan(t): return torch.isnan(t).sum().item()
+                    print(
+                        f"  [NaN breakdown at step {steps+1}]\n"
+                        f"    seq_ideo_scores : NaN={_nan(seq_ideo_scores)}\n"
+                        f"    pos_ideo_scores : NaN={_nan(pos_ideo_scores)}\n"
+                        f"    neg_ideo_scores : NaN={_nan(neg_ideo_scores)}\n"
+                        f"    aligned_ideo    : NaN={_nan(aligned_ideo_scores)}\n"
+                        f"    outside_ideo    : NaN={_nan(outside_ideo_scores)}\n"
+                        f"    all_graph_embs  : NaN={_nan(all_graph_embs)}\n"
+                        f"    u_final         : NaN={_nan(u_final)}\n"
+                        f"    pos_scores      : NaN={_nan(pos_scores)}\n"
+                        f"    neg_scores      : NaN={_nan(neg_scores)}"
+                    )
+                elif nan_steps <= 3:
                     print(
                         f"  [warn] NaN/Inf loss at step {steps+1} "
                         f"(pos={pos_scores.mean():.3f}, neg={neg_scores.mean():.3f}) — skipping"
