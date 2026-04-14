@@ -57,13 +57,39 @@ class CollateWithNegatives:
     def __call__(self, batch: list[dict]) -> dict:
         out = collate_fn(batch)
 
-        pos_items = out["target_item"].tolist()
-        neg_items = [self.neg_sampler.sample(int(pos), k=self.num_negatives)[0] for pos in pos_items]
-        neg_item_idx = torch.tensor(neg_items, dtype=torch.long)
-        neg_ideo = torch.tensor(self.item_ideo_arr[neg_item_idx.numpy()], dtype=torch.float32)
+        pos_items         = out["target_item"].tolist()
+        ideo_current_list = out["ideo_current"].tolist()
+        direction_list    = out["direction"].tolist()
+        delta_list        = out["delta"].tolist()
 
+        # Standard BPR negatives (same ideology band)
+        neg_items    = [self.neg_sampler.sample(int(pos), k=self.num_negatives)[0] for pos in pos_items]
+        neg_item_idx = torch.tensor(neg_items, dtype=torch.long)
+        neg_ideo     = torch.tensor(self.item_ideo_arr[neg_item_idx.numpy()], dtype=torch.float32)
         out["neg_item_idx"] = neg_item_idx
-        out["neg_ideo"] = neg_ideo
+        out["neg_ideo"]     = neg_ideo
+
+        # Ideology-contrastive items
+        aligned_items = [
+            self.neg_sampler.sample_aligned(ic, di, de, exclude_item=int(p))
+            for ic, di, de, p in zip(ideo_current_list, direction_list, delta_list, pos_items)
+        ]
+        outside_items = [
+            self.neg_sampler.sample_outside(ic, di, de, exclude_item=int(p))
+            for ic, di, de, p in zip(ideo_current_list, direction_list, delta_list, pos_items)
+        ]
+
+        aligned_idx = torch.tensor(aligned_items, dtype=torch.long)
+        outside_idx = torch.tensor(outside_items, dtype=torch.long)
+
+        out["ideo_aligned_item_idx"] = aligned_idx
+        out["ideo_aligned_ideo"]     = torch.tensor(
+            self.item_ideo_arr[aligned_idx.numpy()], dtype=torch.float32
+        )
+        out["ideo_outside_item_idx"] = outside_idx
+        out["ideo_outside_ideo"]     = torch.tensor(
+            self.item_ideo_arr[outside_idx.numpy()], dtype=torch.float32
+        )
         return out
 
 
@@ -291,6 +317,63 @@ class NegativeSampler:
         if not pool:
             return random.choices(self.all_items, k=k)
         return random.choices(pool, k=k)
+
+    def sample_aligned(
+        self,
+        ideo_current: float,
+        direction: float,
+        delta: float,
+        exclude_item: int | None = None,
+    ) -> int:
+        """
+        Sample an item within the ideology window:
+            [ideo_current, ideo_current + direction*delta]
+        i.e. items that move in the correct direction by at most delta.
+        Falls back to a random item if the window contains nothing.
+        """
+        d = direction if direction != 0.0 else 1.0
+        lo = ideo_current + min(0.0, d * delta)
+        hi = ideo_current + max(0.0, d * delta)
+
+        b_lo = max(0, int((lo + 3) / 0.5))
+        b_hi = min(11, int((hi + 3) / 0.5))
+
+        pool: list[int] = []
+        for b in range(b_lo, b_hi + 1):
+            pool.extend(self._buckets.get(b, []))
+
+        # Exact continuous-window filter
+        pool = [
+            x for x in pool
+            if lo <= self.item_ideo.get(x, 0.0) <= hi
+            and x != exclude_item
+        ]
+
+        if not pool:
+            pool = [x for x in self.all_items if x != exclude_item]
+        return random.choice(pool) if pool else random.choice(self.all_items)
+
+    def sample_outside(
+        self,
+        ideo_current: float,
+        direction: float,
+        delta: float,
+        exclude_item: int | None = None,
+    ) -> int:
+        """
+        Sample an item OUTSIDE the ideology window — either in the wrong
+        direction or overshooting beyond delta.
+        Falls back to a random item in the degenerate case.
+        """
+        d = direction if direction != 0.0 else 1.0
+        pool = [
+            x for x in self.all_items
+            if x != exclude_item
+            and not (0.0 <= d * (self.item_ideo.get(x, 0.0) - ideo_current) <= delta)
+        ]
+        if not pool:
+            pool = [x for x in self.all_items if x != exclude_item]
+        return random.choice(pool) if pool else random.choice(self.all_items)
 
 
 # ── Collate ───────────────────────────────────────────────────────────────────

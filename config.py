@@ -124,11 +124,10 @@ class FusionConfig:
 @dataclass
 class LossConfig:
     alpha_bpr           : float = 1.0
-    alpha_ideology      : float = 0.5
-    alpha_smoothness    : float = 0.3
-    delta               : float = 0.2      # fixed for now; bandit module later
+    alpha_contrastive   : float = 0.5     # ideology-contrastive weight (replaces alpha_ideology + alpha_smoothness)
+    delta               : float = 0.2     # fixed ideology step; bandit module will supply this later
     num_negatives       : int   = 1
-    negative_strategy   : str   = "hard"   # "random" | "hard"
+    negative_strategy   : str   = "hard"  # "random" | "hard"
     hard_neg_band       : float = 0.5
 
 

@@ -107,8 +107,7 @@ def train(config=cfg):
 
     loss_fn = IdeologyLoss(
         alpha_bpr=config.loss.alpha_bpr,
-        alpha_ideology=config.loss.alpha_ideology,
-        alpha_smoothness=config.loss.alpha_smoothness,
+        alpha_contrastive=config.loss.alpha_contrastive,
     )
 
     checkpoint_dir = Path(config.paths.checkpoint_dir)
@@ -131,28 +130,29 @@ def train(config=cfg):
             all_graph_embs = model.graph_encoder(graph_x, graph_edge_index)  # (N, d)
         # ─────────────────────────────────────────────────────────────────
 
-        running_total = 0.0
-        running_bpr = 0.0
-        running_ideo = 0.0
-        running_smooth = 0.0
-        steps = 0
+        running_total       = 0.0
+        running_bpr         = 0.0
+        running_contrastive = 0.0
+        steps     = 0
         nan_steps = 0
 
         for batch in train_dl:
             optimizer.zero_grad()
 
-            user_idx = batch["user_idx"].to(device)
-            seq_item_ids = batch["history_items"].to(device)
+            user_idx        = batch["user_idx"].to(device)
+            seq_item_ids    = batch["history_items"].to(device)
             seq_ideo_scores = batch["history_states"].to(device)
-            pos_item_ids = batch["target_item"].to(device)
+            pos_item_ids    = batch["target_item"].to(device)
             pos_ideo_scores = batch["target_ideo"].to(device)
-            neg_item_ids = batch["neg_item_idx"].to(device)
+            neg_item_ids    = batch["neg_item_idx"].to(device)
             neg_ideo_scores = batch["neg_ideo"].to(device)
-            ideo_current = batch["ideo_current"].to(device)
-            direction = batch["direction"].to(device)
-            delta = batch["delta"].to(device)
+            # Ideology-contrastive items from CollateWithNegatives
+            aligned_item_ids    = batch["ideo_aligned_item_idx"].to(device)
+            aligned_ideo_scores = batch["ideo_aligned_ideo"].to(device)
+            outside_item_ids    = batch["ideo_outside_item_idx"].to(device)
+            outside_ideo_scores = batch["ideo_outside_ideo"].to(device)
 
-            _, pos_scores, neg_scores = model(
+            u_final, pos_scores, neg_scores = model(
                 graph_x=graph_x,
                 graph_edge_index=graph_edge_index,
                 user_graph_idx=user_idx,
@@ -165,13 +165,17 @@ def train(config=cfg):
                 all_graph_embs=all_graph_embs,
             )
 
+            # Score ideology-contrastive items; gradients flow through these
+            aligned_embs   = model.encode_items(aligned_item_ids, aligned_ideo_scores)  # (B, d)
+            outside_embs   = model.encode_items(outside_item_ids, outside_ideo_scores)  # (B, d)
+            aligned_scores = model.score(u_final, aligned_embs)                         # (B,)
+            outside_scores = model.score(u_final, outside_embs)                         # (B,)
+
             total, loss_parts = loss_fn(
                 pos_scores=pos_scores,
                 neg_scores=neg_scores,
-                ideo_pos=pos_ideo_scores,
-                ideo_current=ideo_current,
-                direction=direction,
-                delta=delta,
+                aligned_scores=aligned_scores,
+                outside_scores=outside_scores,
             )
 
             # Skip NaN batches instead of letting them corrupt weights
@@ -191,10 +195,9 @@ def train(config=cfg):
             optimizer.step()
             scheduler.step()
 
-            running_total += float(total.item())
-            running_bpr += loss_parts["loss_bpr"]
-            running_ideo += loss_parts["loss_ideology"]
-            running_smooth += loss_parts["loss_smoothness"]
+            running_total       += float(total.item())
+            running_bpr         += loss_parts["loss_bpr"]
+            running_contrastive += loss_parts["loss_contrastive"]
             steps += 1
 
         good_steps = steps - nan_steps
@@ -212,15 +215,14 @@ def train(config=cfg):
         )
         hit10 = val_metrics.get("hit@10", 0.0)
 
-        cur_lr = scheduler.get_last_lr()[0]
+        cur_lr   = scheduler.get_last_lr()[0]
         nan_note = f" nan_skipped={nan_steps}" if nan_steps else ""
         print(
             f"Epoch {epoch}/{config.train.num_epochs} "
             f"[{time.time() - t0:.1f}s] "
             f"train={train_loss:.4f} "
             f"bpr={running_bpr / max(good_steps, 1):.4f} "
-            f"ideo={running_ideo / max(good_steps, 1):.4f} "
-            f"smooth={running_smooth / max(good_steps, 1):.4f} "
+            f"contrastive={running_contrastive / max(good_steps, 1):.4f} "
             f"lr={cur_lr:.2e} "
             f"val_hit@10={hit10:.4f}"
             f"{nan_note}"
@@ -272,13 +274,13 @@ def train(config=cfg):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--epochs", type=int, default=None)
-    parser.add_argument("--lr", type=float, default=None)
-    parser.add_argument("--delta", type=float, default=None)
-    parser.add_argument("--alpha", type=float, default=None)
-    parser.add_argument("--beta", type=float, default=None)
-    parser.add_argument("--batch_size", type=int, default=None)
-    parser.add_argument("--device", type=str, default=None)
+    parser.add_argument("--epochs",           type=int,   default=None)
+    parser.add_argument("--lr",               type=float, default=None)
+    parser.add_argument("--delta",            type=float, default=None)
+    parser.add_argument("--alpha_contrastive",type=float, default=None,
+                        help="Weight for ideology-contrastive loss (default 0.5)")
+    parser.add_argument("--batch_size",       type=int,   default=None)
+    parser.add_argument("--device",           type=str,   default=None)
     args = parser.parse_args()
 
     if args.epochs is not None:
@@ -287,10 +289,8 @@ if __name__ == "__main__":
         cfg.train.learning_rate = args.lr
     if args.delta is not None:
         cfg.loss.delta = args.delta
-    if args.alpha is not None:
-        cfg.loss.alpha_ideology = args.alpha
-    if args.beta is not None:
-        cfg.loss.alpha_smoothness = args.beta
+    if args.alpha_contrastive is not None:
+        cfg.loss.alpha_contrastive = args.alpha_contrastive
     if args.batch_size is not None:
         cfg.train.batch_size = args.batch_size
     if args.device is not None:
