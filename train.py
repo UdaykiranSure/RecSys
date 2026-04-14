@@ -232,6 +232,20 @@ def train(config=cfg):
 
             total.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), config.train.grad_clip)
+
+            # Guard: NaN gradients corrupt weights even when loss is finite.
+            # This happens when attn_weights contain NaN (all-masked softmax)
+            # and the backward computes NaN × finite = NaN via matrix multiply.
+            has_nan_grad = any(
+                p.grad is not None and not torch.isfinite(p.grad).all()
+                for p in model.parameters()
+            )
+            if has_nan_grad:
+                optimizer.zero_grad()
+                nan_steps += 1
+                steps += 1
+                continue
+
             optimizer.step()
             scheduler.step()
 

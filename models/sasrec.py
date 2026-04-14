@@ -55,15 +55,27 @@ class SASRecBlock(nn.Module):
         causal_mask:      torch.Tensor | None = None,  # (L, L) bool — passed in from SASRec
     ) -> torch.Tensor:
 
-        # Self-attention with residual
+        # Self-attention with residual.
+        # key_padding_mask is intentionally NOT passed to MHA.
+        #
+        # Why: for left-padded sequences, positions 0..k-1 are all padding.
+        # With key_padding_mask ON, position i (padding) can only attend to
+        # positions ≤ i, all of which are also masked → softmax([-inf,...]) = NaN.
+        # In the BACKWARD pass, NaN attn_weights cause ∂L/∂V = NaN × 0 = NaN
+        # (IEEE 754), which propagates NaN gradients into all shared weights
+        # (TweetEncoder, FusionModule, etc.), corrupting the entire model after
+        # the first optimizer step.
+        #
+        # Without key_padding_mask: padding positions can attend to each other.
+        # Since item_embedding(PAD_IDX=0) is zeroed by padding_idx, padding keys
+        # contribute near-zero to attention values — effectively ignored in practice.
+        # The causal mask is still applied, so information cannot flow from future
+        # to past positions.
         attn_out, _ = self.attn(
             x, x, x,
-            attn_mask         = causal_mask,
-            key_padding_mask  = key_padding_mask,
+            attn_mask = causal_mask,
         )
-        # Padding queries with ALL keys masked → softmax([-inf,...]) = NaN in attn_out.
-        # Replace with 0 so the residual is x + 0 = x (identity for those positions).
-        attn_out = torch.nan_to_num(attn_out, nan=0.0)
+        attn_out = torch.nan_to_num(attn_out, nan=0.0)   # safety net
         x = self.norm1(x + self.drop(attn_out))
 
         # FFN with residual
