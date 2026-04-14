@@ -61,13 +61,17 @@ class SASRecBlock(nn.Module):
             attn_mask         = causal_mask,
             key_padding_mask  = key_padding_mask,
         )
-        # Padding queries that have ALL keys masked produce softmax([-inf,...]) = NaN.
-        # Replace NaN with 0 so the residual x + 0 = x (identity for those positions).
+        # Padding queries with ALL keys masked → softmax([-inf,...]) = NaN in attn_out.
+        # Replace with 0 so the residual is x + 0 = x (identity for those positions).
         attn_out = torch.nan_to_num(attn_out, nan=0.0)
         x = self.norm1(x + self.drop(attn_out))
 
         # FFN with residual
         x = self.norm2(x + self.ff(x))
+
+        # Belt-and-suspenders: ensure no NaN escapes this block and contaminates
+        # the next block's keys/values.
+        x = torch.nan_to_num(x, nan=0.0)
         return x
 
 
@@ -136,15 +140,11 @@ class SASRec(nn.Module):
 
         x = self.norm(x)    # (B, L, d)
 
-        # Extract representation at last real (non-padding) position
-        if padding_mask is None:
-            out = x[:, -1, :]   # (B, d)
-        else:
-            # Last non-padded position per sample
-            # padding_mask: True = pad position
-            # seq_len[i] = number of non-padded tokens in sample i
-            seq_lens = (~padding_mask).sum(dim=1).clamp(min=1) - 1  # (B,)
-            out = x[torch.arange(B, device=x.device), seq_lens]      # (B, d)
+        # Sequences are LEFT-padded: real items are right-aligned, so the last
+        # real item is ALWAYS at position L-1 regardless of sequence length.
+        # The old formula  (count_of_real_items - 1)  was wrong for padded sequences:
+        #   e.g. [PAD×49, item]  → formula gave index 0 (a PAD), correct is 49.
+        out = x[:, -1, :]   # (B, d)
 
         return out    # (B, d)
 

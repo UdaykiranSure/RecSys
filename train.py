@@ -200,19 +200,26 @@ def train(config=cfg):
             if not torch.isfinite(total):
                 nan_steps += 1
                 if nan_steps == 1:
-                    # First NaN: print a per-tensor breakdown to find the root cause
+                    # First NaN: per-tensor breakdown to find the root cause.
+                    # u_final = fusion(u_graph, u_seq); decompose to isolate source.
                     def _nan(t): return torch.isnan(t).sum().item()
+                    with torch.no_grad():
+                        u_graph_dbg = all_graph_embs[user_idx]
+                        seq_embs_dbg = model.tweet_encoder.encode_sequence(
+                            seq_item_ids, seq_ideo_scores
+                        )
+                        pad_mask_dbg = seq_item_ids.eq(0)
+                        u_seq_dbg = model.sasrec(seq_embs_dbg, pad_mask_dbg)
                     print(
                         f"  [NaN breakdown at step {steps+1}]\n"
                         f"    seq_ideo_scores : NaN={_nan(seq_ideo_scores)}\n"
                         f"    pos_ideo_scores : NaN={_nan(pos_ideo_scores)}\n"
-                        f"    neg_ideo_scores : NaN={_nan(neg_ideo_scores)}\n"
-                        f"    aligned_ideo    : NaN={_nan(aligned_ideo_scores)}\n"
-                        f"    outside_ideo    : NaN={_nan(outside_ideo_scores)}\n"
                         f"    all_graph_embs  : NaN={_nan(all_graph_embs)}\n"
+                        f"    u_graph         : NaN={_nan(u_graph_dbg)}\n"
+                        f"    seq_embs        : NaN={_nan(seq_embs_dbg)}\n"
+                        f"    u_seq           : NaN={_nan(u_seq_dbg)}\n"
                         f"    u_final         : NaN={_nan(u_final)}\n"
-                        f"    pos_scores      : NaN={_nan(pos_scores)}\n"
-                        f"    neg_scores      : NaN={_nan(neg_scores)}"
+                        f"    pos_scores      : NaN={_nan(pos_scores)}"
                     )
                 elif nan_steps <= 3:
                     print(
