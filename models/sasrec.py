@@ -61,6 +61,9 @@ class SASRecBlock(nn.Module):
             attn_mask         = causal_mask,
             key_padding_mask  = key_padding_mask,
         )
+        # Padding queries that have ALL keys masked produce softmax([-inf,...]) = NaN.
+        # Replace NaN with 0 so the residual x + 0 = x (identity for those positions).
+        attn_out = torch.nan_to_num(attn_out, nan=0.0)
         x = self.norm1(x + self.drop(attn_out))
 
         # FFN with residual
