@@ -97,19 +97,25 @@ class IdeologyRecommender(nn.Module):
     def encode_user(
         self,
         # Graph inputs
-        graph_x:           torch.Tensor,   # (N, node_feat_dim) full graph features
-        graph_edge_index:  torch.Tensor,   # (2, E) full graph edge index
-        user_graph_idx:    torch.Tensor,   # (B,) index into graph nodes
+        graph_x:           torch.Tensor,            # (N, node_feat_dim) full graph features
+        graph_edge_index:  torch.Tensor,            # (2, E) full graph edge index
+        user_graph_idx:    torch.Tensor,            # (B,) index into graph nodes
         # Sequence inputs
-        seq_item_ids:      torch.Tensor,   # (B, L) padded item ids
-        seq_ideo_scores:   torch.Tensor,   # (B, L) ideology scores
-    ) -> torch.Tensor:                     # (B, embed_dim)
+        seq_item_ids:      torch.Tensor,            # (B, L) padded item ids
+        seq_ideo_scores:   torch.Tensor,            # (B, L) ideology scores
+        # Optional pre-computed graph embeddings (pass to avoid full-graph forward on every batch)
+        all_graph_embs:    torch.Tensor | None = None,  # (N, d) or None
+    ) -> torch.Tensor:                              # (B, embed_dim)
         """
         Encode a batch of users into dense representations.
+
+        If ``all_graph_embs`` is supplied (pre-computed outside the batch loop),
+        the expensive full-graph GraphSAGE forward pass is skipped entirely.
         """
         # 1. Graph embedding
-        all_graph_embs = self.graph_encoder(graph_x, graph_edge_index)  # (N, d)
-        u_graph        = all_graph_embs[user_graph_idx]                 # (B, d)
+        if all_graph_embs is None:
+            all_graph_embs = self.graph_encoder(graph_x, graph_edge_index)  # (N, d)
+        u_graph = all_graph_embs[user_graph_idx]                            # (B, d)
 
         # 2. Sequence embedding
         padding_mask  = make_padding_mask(seq_item_ids)                 # (B, L)
@@ -163,6 +169,8 @@ class IdeologyRecommender(nn.Module):
         pos_ideo_scores:  torch.Tensor,    # (B,)
         neg_item_ids:     torch.Tensor,    # (B,)
         neg_ideo_scores:  torch.Tensor,    # (B,)
+        # Optional pre-computed graph embeddings
+        all_graph_embs:   torch.Tensor | None = None,  # (N, d) or None
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Returns (u_final, pos_scores, neg_scores) for loss computation.
@@ -170,6 +178,7 @@ class IdeologyRecommender(nn.Module):
         u_final    = self.encode_user(
             graph_x, graph_edge_index, user_graph_idx,
             seq_item_ids, seq_ideo_scores,
+            all_graph_embs=all_graph_embs,
         )
         pos_embs   = self.encode_items(pos_item_ids, pos_ideo_scores)  # (B, d)
         neg_embs   = self.encode_items(neg_item_ids, neg_ideo_scores)  # (B, d)

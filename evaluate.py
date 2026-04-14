@@ -94,6 +94,9 @@ def run_evaluation(
     """
     model.eval()
 
+    # Pre-compute graph embeddings once for the entire evaluation pass
+    all_graph_embs = model.graph_encoder(graph_x, graph_edge_index)  # (N, d)
+
     # Pre-encode all catalog items (batch to avoid OOM)
     print(f"  [{split}] Encoding {item_catalog.num_items:,} catalog items...")
     all_item_idx  = torch.arange(item_catalog.num_items, dtype=torch.long).to(device)
@@ -126,13 +129,14 @@ def run_evaluation(
         direction       = batch["direction"].to(device)           # [B]
         delta           = batch["delta"].to(device)               # [B]
 
-        # Encode users
+        # Encode users (graph embeddings already computed above)
         u_final = model.encode_user(
             graph_x=graph_x,
             graph_edge_index=graph_edge_index,
             user_graph_idx=user_idx,
             seq_item_ids=hist_item_idx,
             seq_ideo_scores=hist_ideo,
+            all_graph_embs=all_graph_embs,
         )
 
         # Score all items: [B, M]

@@ -15,7 +15,6 @@ Architecture:
     → Output at last non-padding position
 """
 
-import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -51,15 +50,10 @@ class SASRecBlock(nn.Module):
 
     def forward(
         self,
-        x:           torch.Tensor,   # (B, L, d)
+        x:               torch.Tensor,              # (B, L, d)
         key_padding_mask: torch.Tensor | None = None,  # (B, L) bool, True=pad
+        causal_mask:      torch.Tensor | None = None,  # (L, L) bool — passed in from SASRec
     ) -> torch.Tensor:
-
-        L = x.size(1)
-        # Causal mask: position i cannot attend to positions > i
-        causal_mask = torch.triu(
-            torch.ones(L, L, device=x.device, dtype=torch.bool), diagonal=1
-        )
 
         # Self-attention with residual
         attn_out, _ = self.attn(
@@ -104,6 +98,12 @@ class SASRec(nn.Module):
             for _ in range(num_layers)
         ])
 
+        # Pre-build causal mask once; avoids re-allocating on every forward call
+        causal = torch.triu(
+            torch.ones(max_seq_len, max_seq_len, dtype=torch.bool), diagonal=1
+        )
+        self.register_buffer("causal_mask", causal)   # (max_seq_len, max_seq_len)
+
         self.norm  = nn.LayerNorm(d_model)
         self.drop  = nn.Dropout(dropout)
 
@@ -125,8 +125,11 @@ class SASRec(nn.Module):
 
         x = self.drop(item_embs + pos_emb)
 
+        # Slice the pre-built mask to the actual sequence length
+        causal = self.causal_mask[:L, :L]   # (L, L) — no allocation
+
         for block in self.blocks:
-            x = block(x, key_padding_mask=padding_mask)
+            x = block(x, key_padding_mask=padding_mask, causal_mask=causal)
 
         x = self.norm(x)    # (B, L, d)
 

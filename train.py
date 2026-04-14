@@ -12,6 +12,7 @@ from pathlib import Path
 
 import torch
 import torch.optim as optim
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 
 from config import cfg
 from data.dataset import build_dataloaders
@@ -35,8 +36,15 @@ def load_graph_tensors(processed_dir: str | Path, device: str) -> tuple[torch.Te
     with open(graph_path, "rb") as f:
         graph_data = pickle.load(f)
 
-    graph_x = graph_data.x.to(device)
+    graph_x = graph_data.x.float().to(device)
     graph_edge_index = graph_data.edge_index.to(device)
+
+    # Z-score normalize each feature column to prevent exploding embeddings
+    # (barbera scores and log_degree can have very different scales)
+    mean = graph_x.mean(dim=0, keepdim=True)
+    std  = graph_x.std(dim=0, keepdim=True).clamp(min=1e-6)
+    graph_x = (graph_x - mean) / std
+
     return graph_x, graph_edge_index
 
 
@@ -84,6 +92,19 @@ def train(config=cfg):
         weight_decay=config.train.weight_decay,
     )
 
+    # LR schedule: linear warmup → cosine decay
+    warmup_steps = config.train.warmup_steps
+    total_steps  = config.train.num_epochs * len(train_dl)
+    warmup_sched = LinearLR(
+        optimizer, start_factor=1e-3, end_factor=1.0, total_iters=warmup_steps
+    )
+    cosine_sched = CosineAnnealingLR(
+        optimizer, T_max=max(total_steps - warmup_steps, 1), eta_min=1e-6
+    )
+    scheduler = SequentialLR(
+        optimizer, schedulers=[warmup_sched, cosine_sched], milestones=[warmup_steps]
+    )
+
     loss_fn = IdeologyLoss(
         alpha_bpr=config.loss.alpha_bpr,
         alpha_ideology=config.loss.alpha_ideology,
@@ -101,11 +122,21 @@ def train(config=cfg):
         t0 = time.time()
         model.train()
 
+        # ── Pre-compute full-graph embeddings ONCE per epoch ──────────────
+        # Running GraphSAGE on every batch is the dominant time cost.
+        # We compute it here (detached) so each batch only does an index lookup.
+        # Note: graph_encoder weights are effectively frozen w.r.t. gradient
+        # updates. The SASRec + Fusion components still train normally.
+        with torch.no_grad():
+            all_graph_embs = model.graph_encoder(graph_x, graph_edge_index)  # (N, d)
+        # ─────────────────────────────────────────────────────────────────
+
         running_total = 0.0
         running_bpr = 0.0
         running_ideo = 0.0
         running_smooth = 0.0
         steps = 0
+        nan_steps = 0
 
         for batch in train_dl:
             optimizer.zero_grad()
@@ -131,6 +162,7 @@ def train(config=cfg):
                 pos_ideo_scores=pos_ideo_scores,
                 neg_item_ids=neg_item_ids,
                 neg_ideo_scores=neg_ideo_scores,
+                all_graph_embs=all_graph_embs,
             )
 
             total, loss_parts = loss_fn(
@@ -142,9 +174,22 @@ def train(config=cfg):
                 delta=delta,
             )
 
+            # Skip NaN batches instead of letting them corrupt weights
+            if not torch.isfinite(total):
+                nan_steps += 1
+                if nan_steps <= 3:
+                    print(
+                        f"  [warn] NaN/Inf loss at step {steps+1} "
+                        f"(pos={pos_scores.mean():.3f}, neg={neg_scores.mean():.3f}) — skipping"
+                    )
+                optimizer.zero_grad()
+                steps += 1
+                continue
+
             total.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), config.train.grad_clip)
             optimizer.step()
+            scheduler.step()
 
             running_total += float(total.item())
             running_bpr += loss_parts["loss_bpr"]
@@ -152,7 +197,8 @@ def train(config=cfg):
             running_smooth += loss_parts["loss_smoothness"]
             steps += 1
 
-        train_loss = running_total / max(steps, 1)
+        good_steps = steps - nan_steps
+        train_loss = running_total / max(good_steps, 1)
 
         val_metrics = run_evaluation(
             model=model,
@@ -166,14 +212,18 @@ def train(config=cfg):
         )
         hit10 = val_metrics.get("hit@10", 0.0)
 
+        cur_lr = scheduler.get_last_lr()[0]
+        nan_note = f" nan_skipped={nan_steps}" if nan_steps else ""
         print(
             f"Epoch {epoch}/{config.train.num_epochs} "
             f"[{time.time() - t0:.1f}s] "
             f"train={train_loss:.4f} "
-            f"bpr={running_bpr / max(steps, 1):.4f} "
-            f"ideo={running_ideo / max(steps, 1):.4f} "
-            f"smooth={running_smooth / max(steps, 1):.4f} "
+            f"bpr={running_bpr / max(good_steps, 1):.4f} "
+            f"ideo={running_ideo / max(good_steps, 1):.4f} "
+            f"smooth={running_smooth / max(good_steps, 1):.4f} "
+            f"lr={cur_lr:.2e} "
             f"val_hit@10={hit10:.4f}"
+            f"{nan_note}"
         )
 
         if hit10 > best_hit10:

@@ -138,9 +138,10 @@ class LossConfig:
 class TrainConfig:
     batch_size      : int   = 256
     num_epochs      : int   = 50
-    learning_rate   : float = 1e-3
+    learning_rate   : float = 1e-4        # lowered from 1e-3 to reduce NaN risk
     weight_decay    : float = 1e-4
     grad_clip       : float = 1.0
+    warmup_steps    : int   = 200         # linear LR warmup before full learning rate
     early_stopping  : int   = 5
     eval_every      : int   = 1
     seed            : int   = 42
