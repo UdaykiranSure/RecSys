@@ -138,7 +138,7 @@ class LossConfig:
 
 @dataclass
 class TrainConfig:
-    batch_size      : int   = 256
+    batch_size      : int   = 2048
     num_epochs      : int   = 50
     learning_rate   : float = 1e-4        # lowered from 1e-3 to reduce NaN risk
     weight_decay    : float = 1e-4
