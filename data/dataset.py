@@ -207,12 +207,18 @@ class IdeologySeqDataset(Dataset):
         val_holdout:          int   = 1,
         test_holdout:         int   = 1,
         delta:                float = 0.2,
+        train_target_stride:  int   = 1,
+        max_train_targets_per_user: int | None = None,
+        train_recent_window:  int | None = None,
     ):
         self.item2idx   = item2idx
         self.item_ideo  = item_ideo
         self.user2idx   = user2idx
         self.max_seq_len = max_seq_len
         self.delta       = delta
+        self.train_target_stride = max(1, int(train_target_stride))
+        self.max_train_targets_per_user = max_train_targets_per_user
+        self.train_recent_window = train_recent_window
 
         self.samples: list[dict] = []
         self._build_samples(
@@ -243,6 +249,10 @@ class IdeologySeqDataset(Dataset):
                 for (uid, sc), st in zip(seq, states)
                 if uid in self.item2idx
             ]
+
+            if split == "train" and self.train_recent_window is not None and self.train_recent_window > 0:
+                filtered = filtered[-self.train_recent_window:]
+
             if len(filtered) < total_holdout + 1:
                 continue
 
@@ -250,7 +260,14 @@ class IdeologySeqDataset(Dataset):
 
             # Determine target index for this split
             if split == "train":
-                target_indices = range(1, n - total_holdout)
+                target_indices = list(range(1, n - total_holdout, self.train_target_stride))
+                if (
+                    self.max_train_targets_per_user is not None
+                    and self.max_train_targets_per_user > 0
+                    and len(target_indices) > self.max_train_targets_per_user
+                ):
+                    # Keep most recent targets when user histories are long.
+                    target_indices = target_indices[-self.max_train_targets_per_user:]
             elif split == "val":
                 target_indices = [n - total_holdout]
             else:  # test
@@ -454,6 +471,9 @@ def make_datasets(
     test_holdout:  int   = 1,
     min_item_freq: int   = 5,
     delta:         float = 0.2,
+    train_target_stride: int = 1,
+    max_train_targets_per_user: int | None = None,
+    train_recent_window: int | None = None,
 ) -> tuple[IdeologySeqDataset, IdeologySeqDataset, IdeologySeqDataset,
            dict, dict, dict, dict, NegativeSampler]:
 
@@ -478,6 +498,9 @@ def make_datasets(
         val_holdout          = val_holdout,
         test_holdout         = test_holdout,
         delta                = delta,
+        train_target_stride  = train_target_stride,
+        max_train_targets_per_user = max_train_targets_per_user,
+        train_recent_window  = train_recent_window,
     )
 
     train_ds = IdeologySeqDataset(**kwargs, split="train")
@@ -500,6 +523,9 @@ def build_dataloaders(
     hard_neg_band: float = 0.5,
     num_negatives: int = 1,
     min_item_freq: int = 5,
+    train_target_stride: int = 1,
+    max_train_targets_per_user: int | None = None,
+    train_recent_window: int | None = None,
 ) -> tuple[DataLoader, DataLoader, DataLoader, ItemCatalog]:
     """Build train/val/test dataloaders with compatibility batch fields."""
 
@@ -510,6 +536,9 @@ def build_dataloaders(
         test_holdout=test_holdout,
         min_item_freq=min_item_freq,
         delta=delta,
+        train_target_stride=train_target_stride,
+        max_train_targets_per_user=max_train_targets_per_user,
+        train_recent_window=train_recent_window,
     )
     neg_sampler.band = hard_neg_band
 

@@ -65,6 +65,9 @@ class DataConfig:
     val_holdout               : int   = 1
     test_holdout              : int   = 1
     min_item_freq             : int   = 5
+    train_target_stride       : int   = 3     # keep every k-th train target step
+    max_train_targets_per_user: int | None = 300
+    train_recent_window       : int | None = 1000
 
     # graph
     graph_delimiter           : str   = "\t"

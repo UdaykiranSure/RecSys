@@ -94,6 +94,9 @@ def train(config=cfg):
         hard_neg_band=config.loss.hard_neg_band,
         num_negatives=config.loss.num_negatives,
         min_item_freq=config.data.min_item_freq,
+        train_target_stride=config.data.train_target_stride,
+        max_train_targets_per_user=config.data.max_train_targets_per_user,
+        train_recent_window=config.data.train_recent_window,
     )
 
     graph_x, graph_edge_index = load_graph_tensors(config.paths.processed_dir, device)
