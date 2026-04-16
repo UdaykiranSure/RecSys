@@ -155,7 +155,6 @@ def train(config=cfg):
         running_contrastive = 0.0
         steps     = 0
         nan_steps = 0
-        print(0)
         for batch in train_dl:
             optimizer.zero_grad()
 
@@ -171,7 +170,6 @@ def train(config=cfg):
             aligned_ideo_scores = batch["ideo_aligned_ideo"].to(device)
             outside_item_ids    = batch["ideo_outside_item_idx"].to(device)
             outside_ideo_scores = batch["ideo_outside_ideo"].to(device)
-            print(1)
             u_final, pos_scores, neg_scores = model(
                 graph_x=graph_x,
                 graph_edge_index=graph_edge_index,
@@ -190,14 +188,12 @@ def train(config=cfg):
             outside_embs   = model.encode_items(outside_item_ids, outside_ideo_scores)  # (B, d)
             aligned_scores = model.score(u_final, aligned_embs)                         # (B,)
             outside_scores = model.score(u_final, outside_embs)                         # (B,)
-            print(3)
             total, loss_parts = loss_fn(
                 pos_scores=pos_scores,
                 neg_scores=neg_scores,
                 aligned_scores=aligned_scores,
                 outside_scores=outside_scores,
             )
-            print(4)
 
             # Skip NaN batches instead of letting them corrupt weights
             if not torch.isfinite(total):

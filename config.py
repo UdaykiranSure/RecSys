@@ -61,13 +61,13 @@ class DataConfig:
     missing_ideology_fallback : float = None      # None=drop, 0.0=centrist
 
     # dataset.py
-    max_seq_len               : int   = 50
+    max_seq_len               : int   = 50  
     val_holdout               : int   = 1
     test_holdout              : int   = 1
     min_item_freq             : int   = 5
-    train_target_stride       : int   = 3     # keep every k-th train target step
-    max_train_targets_per_user: int | None = 300
-    train_recent_window       : int | None = 1000
+    train_target_stride       : int   = 1     # keep every k-th train target step
+    max_train_targets_per_user: int | None = None
+    train_recent_window       : int | None = None
 
     # graph
     graph_delimiter           : str   = "\t"
