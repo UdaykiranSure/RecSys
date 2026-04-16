@@ -130,23 +130,22 @@ def train(config=cfg):
     best_hit10 = -1.0
     no_improve = 0
 
+    # ── Pre-compute full-graph embeddings ONCE for the entire run ─────────
+    # graph_encoder weights never receive gradients (all forward calls use
+    # this pre-computed tensor via index lookup, not the encoder itself).
+    # Computing once before the epoch loop saves one full GraphSAGE pass
+    # per epoch and makes the frozen-encoder design explicit.
+    with torch.no_grad():
+        all_graph_embs = model.graph_encoder(graph_x, graph_edge_index)  # (N, d)
+
+    if torch.isnan(all_graph_embs).any():
+        print(f"  [ERROR] all_graph_embs contains NaN after graph_encoder — "
+              f"check graph_x (NaN={torch.isnan(graph_x).sum().item()})")
+    # ─────────────────────────────────────────────────────────────────────
+
     for epoch in range(1, config.train.num_epochs + 1):
         t0 = time.time()
         model.train()
-
-        # ── Pre-compute full-graph embeddings ONCE per epoch ──────────────
-        # Running GraphSAGE on every batch is the dominant time cost.
-        # We compute it here (detached) so each batch only does an index lookup.
-        # Note: graph_encoder weights are effectively frozen w.r.t. gradient
-        # updates. The SASRec + Fusion components still train normally.
-        with torch.no_grad():
-            all_graph_embs = model.graph_encoder(graph_x, graph_edge_index)  # (N, d)
-
-        # Sanity-check graph embeddings before the batch loop
-        if torch.isnan(all_graph_embs).any():
-            print(f"  [ERROR] all_graph_embs contains NaN after graph_encoder — "
-                  f"check graph_x (NaN={torch.isnan(graph_x).sum().item()})")
-        # ─────────────────────────────────────────────────────────────────
 
         running_total       = 0.0
         running_bpr         = 0.0

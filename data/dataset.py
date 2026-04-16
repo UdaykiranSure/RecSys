@@ -69,18 +69,60 @@ class CollateWithNegatives:
         out["neg_item_idx"] = neg_item_idx
         out["neg_ideo"]     = neg_ideo
 
-        # Ideology-contrastive items
-        aligned_items = [
-            self.neg_sampler.sample_aligned(ic, di, de, exclude_item=int(p))
-            for ic, di, de, p in zip(ideo_current_list, direction_list, delta_list, pos_items)
-        ]
-        outside_items = [
-            self.neg_sampler.sample_outside(ic, di, de, exclude_item=int(p))
-            for ic, di, de, p in zip(ideo_current_list, direction_list, delta_list, pos_items)
-        ]
+        # Ideology-contrastive items — vectorized via numpy broadcasting.
+        # Avoids O(B * num_items) Python loops; replaces per-sample list comprehensions.
+        item_arr     = self.neg_sampler.all_items_arr   # (M,)
+        item_ideo_np = self.neg_sampler.all_ideo_arr    # (M,)
+        item_to_pos  = self.neg_sampler._item_to_pos
+        M = len(item_arr)
+        B = len(pos_items)
 
-        aligned_idx = torch.tensor(aligned_items, dtype=torch.long)
-        outside_idx = torch.tensor(outside_items, dtype=torch.long)
+        ideo_c = np.array(ideo_current_list, dtype=np.float32)   # (B,)
+        dirs   = np.array(direction_list,    dtype=np.float32)   # (B,)
+        ds     = np.where(dirs != 0.0, dirs, 1.0)                # (B,) — avoid zero dir
+        deltas = np.array(delta_list,        dtype=np.float32)   # (B,)
+
+        # shifts[i, j] = ds[i] * (item_ideo[j] - ideo_c[i]) — (B, M)
+        shifts = ds[:, None] * (item_ideo_np[None, :] - ideo_c[:, None])  # (B, M)
+        in_win = (shifts >= 0.0) & (shifts <= deltas[:, None])            # (B, M) bool
+
+        aligned_mask = in_win.copy()   # candidates for aligned (inside window)
+        outside_mask = ~in_win         # candidates for outside (outside window)
+
+        # Exclude the positive item from both pools
+        pos_arr = np.array(pos_items, dtype=np.int64)
+        for i in range(B):
+            j = item_to_pos.get(int(pos_arr[i]))
+            if j is not None:
+                aligned_mask[i, j] = False
+                outside_mask[i, j] = False
+
+        # Assign uniform random scores; masked positions get -1 (never picked by argmax)
+        rnd = np.random.random((B, M)).astype(np.float32)
+        rnd_aligned = np.where(aligned_mask, rnd, -1.0)
+        rnd_outside = np.where(outside_mask, rnd, -1.0)
+
+        best_a = rnd_aligned.argmax(axis=1)  # (B,) index into item_arr
+        best_o = rnd_outside.argmax(axis=1)  # (B,)
+
+        valid_a = rnd_aligned[np.arange(B), best_a] >= 0.0
+        valid_o = rnd_outside[np.arange(B), best_o] >= 0.0
+
+        aligned_items_np = item_arr[best_a].copy()
+        outside_items_np = item_arr[best_o].copy()
+
+        # Fallback (rare): no candidate found → pick any item != pos
+        for i in range(B):
+            if not valid_a[i] or not valid_o[i]:
+                fallback = item_arr[item_arr != pos_arr[i]]
+                fb = fallback if len(fallback) > 0 else item_arr
+                if not valid_a[i]:
+                    aligned_items_np[i] = np.random.choice(fb)
+                if not valid_o[i]:
+                    outside_items_np[i] = np.random.choice(fb)
+
+        aligned_idx = torch.from_numpy(aligned_items_np)
+        outside_idx = torch.from_numpy(outside_items_np)
 
         out["ideo_aligned_item_idx"] = aligned_idx
         out["ideo_aligned_ideo"]     = torch.tensor(
@@ -304,6 +346,16 @@ class NegativeSampler:
             bucket = int((sc + 3) / 0.5)  # 0..11
             self._buckets.setdefault(bucket, []).append(item)
 
+        # Numpy arrays for vectorized batch sampling in CollateWithNegatives
+        self.all_items_arr = np.array(self.all_items, dtype=np.int64)
+        self.all_ideo_arr  = np.array(
+            [self.item_ideo.get(x, 0.0) for x in self.all_items], dtype=np.float32
+        )
+        # item_id → position in all_items_arr (for fast per-sample exclusion)
+        self._item_to_pos: dict[int, int] = {
+            item: i for i, item in enumerate(self.all_items)
+        }
+
     def sample(self, pos_item: int, k: int = 1) -> list[int]:
         if self.strategy == "random":
             return random.choices(self.all_items, k=k)
@@ -481,7 +533,13 @@ def build_dataloaders(
         num_negatives=num_negatives,
     )
 
-    common = dict(batch_size=batch_size, num_workers=num_workers, collate_fn=collate_with_negs)
+    common = dict(
+        batch_size=batch_size,
+        num_workers=num_workers,
+        collate_fn=collate_with_negs,
+        pin_memory=(num_workers > 0),
+        persistent_workers=(num_workers > 0),
+    )
     train_dl = DataLoader(train_ds, shuffle=True, **common)
     val_dl = DataLoader(val_ds, shuffle=False, **common)
     test_dl = DataLoader(test_ds, shuffle=False, **common)
