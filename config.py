@@ -163,7 +163,7 @@ class EvalConfig:
 # ── Master Config ─────────────────────────────────────────────────────────────
 
 @dataclass
-class Config:
+class cConfig:
     paths     : PathConfig         = field(default_factory=PathConfig)
     data      : DataConfig         = field(default_factory=DataConfig)
     tweet_enc : TweetEncoderConfig = field(default_factory=TweetEncoderConfig)
@@ -186,4 +186,4 @@ class Config:
             Path(getattr(self.paths, attr)).mkdir(parents=True, exist_ok=True)
 
 
-cfg = Config()
+cfg = cConfig()

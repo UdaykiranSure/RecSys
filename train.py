@@ -153,6 +153,7 @@ def train(config=cfg):
         running_total       = 0.0
         running_bpr         = 0.0
         running_contrastive = 0.0
+        running_margin      = 0.0  # mean(aligned_score - outside_score)
         steps     = 0
         nan_steps = 0
         for batch in train_dl:
@@ -251,6 +252,7 @@ def train(config=cfg):
             running_total       += float(total.item())
             running_bpr         += loss_parts["loss_bpr"]
             running_contrastive += loss_parts["loss_contrastive"]
+            running_margin      += (aligned_scores - outside_scores).mean().item()
             steps += 1
 
         good_steps = steps - nan_steps
@@ -270,14 +272,22 @@ def train(config=cfg):
 
         cur_lr   = scheduler.get_last_lr()[0]
         nan_note = f" nan_skipped={nan_steps}" if nan_steps else ""
+        avg_margin = running_margin / max(good_steps, 1)
+        dir_acc  = val_metrics.get("direction_acc", float("nan"))
+        ideo_win = val_metrics.get("ideo_in_window", float("nan"))
+        ideo_drift = val_metrics.get("ideo_drift@10", float("nan"))
         print(
             f"Epoch {epoch}/{config.train.num_epochs} "
             f"[{time.time() - t0:.1f}s] "
             f"train={train_loss:.4f} "
             f"bpr={running_bpr / max(good_steps, 1):.4f} "
             f"contrastive={running_contrastive / max(good_steps, 1):.4f} "
+            f"margin={avg_margin:.4f} "
             f"lr={cur_lr:.2e} "
-            f"val_hit@10={hit10:.4f}"
+            f"val_hit@10={hit10:.4f} "
+            f"dir_acc={dir_acc:.4f} "
+            f"ideo_in_win={ideo_win:.4f} "
+            f"ideo_drift@10={ideo_drift:.4f}"
             f"{nan_note}"
         )
 
