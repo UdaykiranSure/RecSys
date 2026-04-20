@@ -270,12 +270,12 @@ def train(config=cfg):
         )
         hit10 = val_metrics.get("hit@10", 0.0)
 
-        cur_lr   = scheduler.get_last_lr()[0]
-        nan_note = f" nan_skipped={nan_steps}" if nan_steps else ""
+        cur_lr     = scheduler.get_last_lr()[0]
+        nan_note   = f" nan_skipped={nan_steps}" if nan_steps else ""
         avg_margin = running_margin / max(good_steps, 1)
-        dir_acc  = val_metrics.get("direction_acc", float("nan"))
-        ideo_win = val_metrics.get("ideo_in_window", float("nan"))
-        ideo_drift = val_metrics.get("ideo_drift@10", float("nan"))
+        dir_acc    = val_metrics.get("direction_acc",  float("nan"))
+        ideo_win   = val_metrics.get("ideo_in_window", float("nan"))
+        ideo_drift = val_metrics.get("ideo_drift@10",  float("nan"))
         print(
             f"Epoch {epoch}/{config.train.num_epochs} "
             f"[{time.time() - t0:.1f}s] "
@@ -314,7 +314,7 @@ def train(config=cfg):
             break
 
     if best_path.exists():
-        ckpt = torch.load(best_path, map_location=device)
+        ckpt = torch.load(best_path, map_location=device, weights_only= False)
         model.load_state_dict(ckpt["model_state"])
 
     test_metrics = run_evaluation(
